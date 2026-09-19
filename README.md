@@ -14,7 +14,7 @@ This project is a RAG chatbot built with Python and Ollama. It loads a text file
 ## Project Structure
 
 ```
-Rag-Chatbot-Ollama/
+RAG-Chatbot/
 ├── data/
 │   └── cat-facts.txt
 ├── src/
