@@ -4,10 +4,10 @@ This project is a RAG chatbot built with Python and Ollama. It loads a text file
 
 ## How it Works
 
-1. Loads text data.
-2. Creates embeddings.
+1. Loads the text file and splits it into chunks.
+2. Creates embeddings for each chunk.
 3. Stores embeddings in a simple in-memory vector database.
-4. Retrieves the most relevant text using cosine similarity.
+4. Retrieves the most relevant chunks using cosine similarity.
 5. Sends the retrieved context to a language model.
 6. Streams the chatbot response in real time.
 
@@ -19,13 +19,24 @@ RAG-Chatbot/
 │   └── cat-facts.txt
 ├── src/
 │   ├── config.py
+│   ├── chunking.py
 │   ├── data_loader.py
 │   ├── vector_db.py
 │   └── chatbot.py
 ├── main.py
+├── .env
 ├── requirements.txt
 └── README.md
 ```
+
+## Chunking
+
+1. Splits on blank lines into paragraphs. If the file has no blank lines at all,
+   each non-empty line is treated as its own paragraph instead.
+2. Keeps a paragraph as a single chunk if it fits within `RAG_CHUNK_SIZE` words.
+3. Otherwise splits it into overlapping word-windows (`RAG_CHUNK_SIZE` words
+   wide, `RAG_CHUNK_OVERLAP` words of overlap between consecutive windows) so
+   context isn't lost at arbitrary cut points.
 
 ## Requirements
 
@@ -35,7 +46,7 @@ RAG-Chatbot/
   - `hf.co/CompendiumLabs/bge-base-en-v1.5-gguf`
   - `hf.co/bartowski/Llama-3.2-1B-Instruct-GGUF`
 
-Install the Python dependency:
+Install the Python dependencies:
 
 ```bash
 pip install -r requirements.txt

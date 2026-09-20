@@ -2,11 +2,12 @@
 import logging
 
 from src.chatbot import stream_answer
+from src.config import settings
 from src.data_loader import load_dataset
 from src.vector_db import build_database, retrieve
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )

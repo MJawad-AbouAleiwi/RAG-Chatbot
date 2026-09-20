@@ -2,7 +2,7 @@
 import logging
 import ollama
 
-from src.config import LANGUAGE_MODEL
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def stream_answer(input_query: str, retrieved_knowledge: list[tuple[str, float]]
 
     try:
         stream = ollama.chat(
-            model=LANGUAGE_MODEL,
+            model=settings.language_model,
             messages=[
                 {"role": "system", "content": instruction_prompt},
                 {"role": "user", "content": input_query},
@@ -31,9 +31,9 @@ def stream_answer(input_query: str, retrieved_knowledge: list[tuple[str, float]]
         )
     except Exception as exc:
         raise RuntimeError(
-            f"Could not reach Ollama to generate a response using model '{LANGUAGE_MODEL}'. "
+            f"Could not reach Ollama to generate a response using model '{settings.language_model}'. "
             "Is the Ollama server running, and has the model been pulled "
-            f"(`ollama pull {LANGUAGE_MODEL}`)? Original error: {exc}"
+            f"(`ollama pull {settings.language_model}`)? Original error: {exc}"
         ) from exc
 
     print("Chatbot responding...")
