@@ -1,98 +1,95 @@
-# Vector database and retrieval logic
+# Vector database and retrieval logic, backed by a persistent Chroma collection
 import hashlib
-import json
 import logging
-import os
-
-import numpy as np
+import chromadb
 import ollama
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-# In-memory vector database: parallel lists kept in sync
-_CHUNKS: list[str] = []
-_EMBEDDINGS: np.ndarray | None = None
+_client: chromadb.ClientAPI | None = None
+_collection: chromadb.Collection | None = None
 
+def _chunk_id(chunk: str) -> str:
+    # Deterministic id for a chunk, used to detect new, unchanged, orremoved chunks
+    return hashlib.sha256(chunk.encode("utf-8")).hexdigest()[:24]
 
-def _dataset_fingerprint(dataset: list[str]) -> str:
-    # Hash the dataset + embedding model so the cache invalidates when either changes
-    hasher = hashlib.sha256()
-    hasher.update(settings.embedding_model.encode("utf-8"))
-    for chunk in dataset:
-        hasher.update(chunk.encode("utf-8"))
-    return hasher.hexdigest()
+def _collection_name() -> str:
+    # Bucket collections by embedding model
+    model_hash = hashlib.sha256(settings.embedding_model.encode("utf-8")).hexdigest()[:12]
+    return f"rag_chunks_{model_hash}"
 
-def _embed(text: str) -> list[float]:
-    # Call Ollama's embedding endpoint with a clear error if Ollama isn't available
+def _get_collection() -> chromadb.Collection:
+    # Lazily create the persistent collection on first use
+    global _client, _collection
+    if _collection is None:
+        _client = chromadb.PersistentClient(path=settings.vector_store_dir)
+        _collection = _client.get_or_create_collection(
+            name=_collection_name(),
+            metadata={"hnsw:space": "cosine", "embedding_model": settings.embedding_model},
+        )
+    return _collection
+
+def _embed_many(texts: list[str]) -> list[list[float]]:
+    # Embed a batch of texts in a single Ollama call
+    if not texts:
+        return []
     try:
-        response = ollama.embed(model=settings.embedding_model, input=text)
+        response = ollama.embed(model=settings.embedding_model, input=texts)
     except Exception as exc:
         raise RuntimeError(
             f"Could not reach Ollama to embed text using model '{settings.embedding_model}'. "
             "Is the Ollama server running, and has the model been pulled "
             f"(`ollama pull {settings.embedding_model}`)? Original error: {exc}"
         ) from exc
-    return response["embeddings"][0]
+    return response["embeddings"]
 
-def _load_cache(fingerprint: str) -> tuple[list[str], np.ndarray] | None:
-    if not os.path.exists(settings.embedding_cache_path):
-        return None
-    try:
-        with open(settings.embedding_cache_path, "r", encoding="utf-8") as f:
-            cached = json.load(f)
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Ignoring unreadable embedding cache: %s", exc)
-        return None
-
-    if cached.get("fingerprint") != fingerprint:
-        return None
-
-    chunks = cached["chunks"]
-    embeddings = np.array(cached["embeddings"], dtype=np.float32)
-    logger.info("Loaded %d cached embeddings from %s", len(chunks), settings.embedding_cache_path)
-    return chunks, embeddings
-
-def _save_cache(fingerprint: str, chunks: list[str], embeddings: np.ndarray) -> None:
-    os.makedirs(os.path.dirname(settings.embedding_cache_path), exist_ok=True)
-    payload = {
-        "fingerprint": fingerprint,
-        "chunks": chunks,
-        "embeddings": embeddings.tolist(),
-    }
-    with open(settings.embedding_cache_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f)
-    logger.info("Cached %d embeddings to %s", len(chunks), settings.embedding_cache_path)
+def _embed_one(text: str) -> list[float]:
+    # Embed a single text string using the batch embedding function
+    return _embed_many([text])[0]
 
 def build_database(dataset: list[str]) -> None:
-    # Embed every entry in the dataset (or load from cache) and store it in memory
-    global _CHUNKS, _EMBEDDINGS
+    # Sync the persistent vector store with the current dataset
+    collection = _get_collection()
 
-    fingerprint = _dataset_fingerprint(dataset)
-    cached = _load_cache(fingerprint)
-    if cached is not None:
-        _CHUNKS, _EMBEDDINGS = cached
+    incoming_ids = [_chunk_id(chunk) for chunk in dataset]
+    id_to_chunk = dict(zip(incoming_ids, dataset))
+
+    existing_ids = set(collection.get(include=[])["ids"])
+    incoming_id_set = set(incoming_ids)
+
+    stale_ids = list(existing_ids - incoming_id_set)
+    if stale_ids:
+        collection.delete(ids=stale_ids)
+        logger.info("Removed %d stale chunks from the vector store", len(stale_ids))
+
+    new_ids = [i for i in incoming_ids if i not in existing_ids]
+    if not new_ids:
+        logger.info("Vector store already up to date (%d chunks, nothing new)", len(dataset))
         return
 
-    logger.info("Embedding %d chunks (no valid cache found)...", len(dataset))
-    embeddings = [_embed(chunk) for chunk in dataset]
-
-    _CHUNKS = dataset
-    _EMBEDDINGS = np.array(embeddings, dtype=np.float32)
-    _save_cache(fingerprint, _CHUNKS, _EMBEDDINGS)
+    logger.info("Embedding %d new chunk(s) of %d total...", len(new_ids), len(dataset))
+    new_chunks = [id_to_chunk[i] for i in new_ids]
+    embeddings = _embed_many(new_chunks)
+    collection.add(ids=new_ids, documents=new_chunks, embeddings=embeddings)
+    logger.info("Vector store now holds %d chunks", collection.count())
 
 def retrieve(query: str, top_n: int = settings.top_n) -> list[tuple[str, float]]:
     # Return the top_n chunks most similar to the query
-    if _EMBEDDINGS is None or len(_CHUNKS) == 0:
+    collection = _get_collection()
+    count = collection.count()
+    if count == 0:
         raise RuntimeError("Vector database is empty. Call build_database() before retrieve().")
 
-    query_embedding = np.array(_embed(query), dtype=np.float32)
+    query_embedding = _embed_one(query)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=min(top_n, count),
+        include=["documents", "distances"],
+    )
 
-    # Cosine similarity, vectorized across all stored chunks at once.
-    query_norm = np.linalg.norm(query_embedding)
-    chunk_norms = np.linalg.norm(_EMBEDDINGS, axis=1)
-    similarities = (_EMBEDDINGS @ query_embedding) / (chunk_norms * query_norm + 1e-10)
-
-    top_indices = np.argsort(similarities)[::-1][:top_n]
-    return [(_CHUNKS[i], float(similarities[i])) for i in top_indices]
+    documents = results["documents"][0]
+    distances = results["distances"][0]
+    
+    return [(doc, 1.0 - dist) for doc, dist in zip(documents, distances)]

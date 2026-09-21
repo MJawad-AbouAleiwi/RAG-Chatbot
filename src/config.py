@@ -20,9 +20,9 @@ class Settings(BaseSettings):
         default=os.path.join(_PROJECT_ROOT, "data", "cat-facts.txt"),
         description="Path to the knowledge base text file.",
     )
-    cache_dir: str = Field(
-        default=os.path.join(_PROJECT_ROOT, ".cache"),
-        description="Directory used to cache computed embeddings.",
+    vector_store_dir: str = Field(
+        default=os.path.join(_PROJECT_ROOT, ".cache", "chroma"),
+        description="Directory where the persistent Chroma vector store lives.",
     )
 
     # Ollama models
@@ -59,10 +59,6 @@ class Settings(BaseSettings):
                 f"chunk_size ({self.chunk_size}), or chunks would never advance."
             )
         return self
-
-    @property
-    def embedding_cache_path(self) -> str:
-        return os.path.join(self.cache_dir, "embeddings_cache.json")
 
 # Single shared instance imported throughout the app
 settings = Settings()

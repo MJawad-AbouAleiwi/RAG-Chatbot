@@ -4,6 +4,7 @@ import re
 def split_into_paragraphs(text: str) -> list[str]:
     # Split raw text into paragraphs, with a sensible fallback for line-per-fact files
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+
     raw_paragraphs = re.split(r"\n\s*\n", normalized)
     paragraphs = [p.strip() for p in raw_paragraphs if p.strip()]
 

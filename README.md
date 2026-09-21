@@ -5,11 +5,10 @@ This project is a RAG chatbot built with Python and Ollama. It loads a text file
 ## How it Works
 
 1. Loads the text file and splits it into chunks.
-2. Creates embeddings for each chunk.
-3. Stores embeddings in a simple in-memory vector database.
-4. Retrieves the most relevant chunks using cosine similarity.
-5. Sends the retrieved context to a language model.
-6. Streams the chatbot response in real time.
+2. Embeds each new chunk and stores it in a persistent vector store on disk.
+3. Retrieves the most relevant chunks for a query via Chroma's similarity search.
+4. Sends the retrieved context to a language model.
+5. Streams the chatbot response in real time.
 
 ## Project Structure
 
@@ -24,7 +23,7 @@ RAG-Chatbot/
 │   ├── vector_db.py
 │   └── chatbot.py
 ├── main.py
-├── .env
+├── .env.example
 ├── requirements.txt
 └── README.md
 ```
@@ -34,9 +33,18 @@ RAG-Chatbot/
 1. Splits on blank lines into paragraphs. If the file has no blank lines at all,
    each non-empty line is treated as its own paragraph instead.
 2. Keeps a paragraph as a single chunk if it fits within `RAG_CHUNK_SIZE` words.
-3. Otherwise splits it into overlapping word-windows (`RAG_CHUNK_SIZE` words
-   wide, `RAG_CHUNK_OVERLAP` words of overlap between consecutive windows) so
-   context isn't lost at arbitrary cut points.
+3. Otherwise splits it into overlapping word-windows so context isn't lost at arbitrary cut points.
+
+## Vector store
+
+Chunks are embedded and stored in a persistent [Chroma](https://www.trychroma.com/)
+collection on disk at `RAG_VECTOR_STORE_DIR`, using cosine similarity for retrieval.
+
+- The collection is loaded from disk, not rebuilt from scratch, every time the app starts.
+- Each chunk gets a stable id derived from a hash of its own text.
+- Chroma indexes with HNSW instead of a linear scan over every stored vector.
+- The collection name is derived from `RAG_EMBEDDING_MODEL`, so switching embedding models can't
+  accidentally mix incompatible vectors in the same collection.
 
 ## Requirements
 
